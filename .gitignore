@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+venv/
+.env
+
+# Docker
+*.log
+postgres_data/
+
+# macOS
+.DS_Store
+
+# Ollama
+*.bin

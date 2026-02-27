@@ -1,0 +1,10 @@
+celery
+redis
+psycopg2-binary
+sqlalchemy
+feedparser
+requests
+sqlalchemy
+psycopg2-binary
+feedparser
+numpy

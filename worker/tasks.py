@@ -50,7 +50,7 @@ def ingest_posts(db):
             except Exception as e:
                 print("Embedding/Summary error:", e)
                 continue
-
+            
             db.execute(
                 text("""
                     INSERT INTO posts (url, title, published_at, summary, embedding)
@@ -123,8 +123,7 @@ def process_digest(frequency, days_back, max_posts):
             title = post[2]
             published_at = datetime.fromisoformat(post[3])
             summary = post[4]
-            embedding = json.loads(post[5])
-
+            embedding = post[5]
             if published_at < cutoff:
                 continue
 

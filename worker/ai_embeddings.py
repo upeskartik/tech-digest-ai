@@ -15,11 +15,11 @@ def get_embedding(text):
         timeout=120
     )
 
-    print("STATUS:", response.status_code)
-    print("RAW:", response.text)   # 🔥 print full response
+    # print("STATUS:", response.status_code)
+    # print("RAW:", response.text)   # 🔥 print full response
 
     response.raise_for_status()
-    return response.json()
+    return response.json()["embeddings"][0]
 
 def cosine_similarity(vec1, vec2):
     v1 = np.array(vec1)

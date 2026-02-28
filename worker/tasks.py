@@ -2,7 +2,7 @@ from datetime import datetime, timedelta
 import feedparser
 import json
 import numpy as np
-
+import helper
 from worker import celery, send_email
 from database import SessionLocal
 from sqlalchemy import text
@@ -42,7 +42,7 @@ def ingest_posts(db):
             if existing:
                 continue  # already cached
 
-            article_text = entry.title + " " + getattr(entry, "summary", "")
+            article_text = f"{entry.title} {getattr(entry, 'summary', '')}"
 
             try:
                 embedding = get_embedding(article_text)
@@ -108,15 +108,25 @@ def process_digest(frequency, days_back, max_posts):
             continue
 
         # Create user embedding ONCE
-        user_profile_text = " ".join(keywords)
+        # user_profile_text = " ".join(keywords)
         try:
+            user_profile_text = f"""
+                The user is a software engineer interested in:
+                {", ".join(keywords)}.
+
+                Topics include:
+                containerization, Dockerfiles, images,
+                Kubernetes, DevOps pipelines,
+                microservices, backend architecture,
+                deployment, CI/CD systems.
+                """
             user_embedding = get_embedding(user_profile_text)
         except Exception as e:
             print("User embedding error:", e)
             continue
 
         ranked_posts = []
-
+        scored_posts = []
         for post in posts:
             post_id = post[0]
             url = post[1]
@@ -140,16 +150,19 @@ def process_digest(frequency, days_back, max_posts):
                 continue
 
             similarity = cosine_similarity(user_embedding, embedding)
+            days_old = (datetime.utcnow() - published_at).days
+            freshness_score = 1 / (1 + days_old)
 
+            final_score = (similarity * 0.8) + (freshness_score * 0.2)
             # Threshold filtering
-            if similarity < 0.65:
+            if final_score < 0.65:
                 continue
 
             ranked_posts.append({
                 "title": title,
                 "link": url,
                 "summary": summary,
-                "score": similarity
+                "score": final_score
             })
 
         # Sort by semantic similarity

@@ -20,9 +20,9 @@ class User(Base):
     needs_behavior_update = Column(Boolean, default=False)
 
     # EXPLICIT (future)
-    explicit_embedding = Column(JSONB, nullable=True)
-    explicit_weight = Column(Float, default=0.0)
-    explicit_expires_at = Column(DateTime, nullable=True)
+    # explicit_embedding = Column(JSONB, nullable=True)
+    # explicit_weight = Column(Float, default=0.0)
+    # explicit_expires_at = Column(DateTime, nullable=True)
     # Relationships
     interests = relationship(
         "Interest",

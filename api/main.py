@@ -36,6 +36,7 @@ def register_user(data: RegisterRequest):
         db.add(Interest(user_id=user.id, keyword=keyword))
 
     db.commit()
+    
     return {"message": "User registered successfully"}
 
 @app.get("/track-click")

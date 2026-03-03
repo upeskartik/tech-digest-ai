@@ -1,8 +1,8 @@
-from sqlalchemy import Column, Integer, String, ForeignKey, JSON
+from sqlalchemy import Column, Integer, String, ForeignKey, JSON, DateTime, Float, Boolean
 from sqlalchemy.orm import relationship
 from database import Base
 from sqlalchemy.dialects.postgresql import JSONB
-
+from datetime import datetime
 
 class User(Base):
     __tablename__ = "users"
@@ -10,7 +10,19 @@ class User(Base):
     id = Column(Integer, primary_key=True, index=True)
     email = Column(String, unique=True, index=True, nullable=False)
     frequency = Column(String, default="daily", nullable=False)  # daily, weekly, monthly
+    # Long Term
+    core_embedding = Column(JSONB, nullable=True)
 
+    #Behavior
+    behavior_embedding = Column(JSONB, nullable=True)
+    behavior_click_count = Column(Integer, default=0)
+    last_behavior_update_at = Column(DateTime, nullable=True)
+    needs_behavior_update = Column(Boolean, default=False)
+
+    # EXPLICIT (future)
+    explicit_embedding = Column(JSONB, nullable=True)
+    explicit_weight = Column(Float, default=0.0)
+    explicit_expires_at = Column(DateTime, nullable=True)
     # Relationships
     interests = relationship(
         "Interest",
@@ -63,3 +75,11 @@ class Post(Base):
     published_at = Column(String)
     summary = Column(String)
     embedding = Column(JSONB)
+
+class Click(Base):
+    __tablename__ = "clicks"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"))
+    post_url = Column(String)
+    created_at = Column(DateTime, default=datetime.utcnow)

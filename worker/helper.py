@@ -16,3 +16,6 @@ def clean_text(text):
     clean = re.sub(r"\s+", " ", clean)
 
     return clean.strip()
+
+def has_embedding(emb):
+    return emb is not None and len(emb) > 0

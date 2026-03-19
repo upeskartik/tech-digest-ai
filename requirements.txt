@@ -8,3 +8,5 @@ requests
 numpy
 celery
 beautifulsoup4
+pgvector
+feedparser

@@ -1,8 +1,9 @@
 from sqlalchemy import Column, Integer, String, ForeignKey, JSON, DateTime, Float, Boolean
 from sqlalchemy.orm import relationship
-from database import Base
+from app.database import Base
 from sqlalchemy.dialects.postgresql import JSONB
 from datetime import datetime
+from pgvector.sqlalchemy import Vector
 
 class User(Base):
     __tablename__ = "users"
@@ -11,10 +12,10 @@ class User(Base):
     email = Column(String, unique=True, index=True, nullable=False)
     frequency = Column(String, default="daily", nullable=False)  # daily, weekly, monthly
     # Long Term
-    core_embedding = Column(JSONB, nullable=True)
+    core_embedding = Column(Vector(1024), nullable=True)
 
     #Behavior
-    behavior_embedding = Column(JSONB, nullable=True)
+    behavior_embedding = Column(Vector(1024), nullable=True)
     behavior_click_count = Column(Integer, default=0)
     last_behavior_update_at = Column(DateTime, nullable=True)
     needs_behavior_update = Column(Boolean, default=False)
@@ -74,7 +75,7 @@ class Post(Base):
     title = Column(String, nullable=False)
     published_at = Column(String)
     summary = Column(String)
-    embedding = Column(JSONB)
+    embedding = Column(Vector(1024))
 
 class Click(Base):
     __tablename__ = "clicks"

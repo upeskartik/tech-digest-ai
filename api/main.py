@@ -1,15 +1,19 @@
 from requests import Session
 from fastapi import FastAPI
 from pydantic import BaseModel
-from database import SessionLocal
-import models
+from app.database import SessionLocal
+# import models
 from fastapi.responses import RedirectResponse
 from sqlalchemy import text
-from models import User, Interest, Post, Click, SentPost
-from database import engine
-from models import Base
+from app.models import User, Interest, Post, Click, SentPost
+from app.database import engine
+from app.models import Base
 from datetime import datetime, timedelta
-from helper import get_embedding
+from api.helper import get_embedding
+
+with engine.connect() as conn:
+    conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+    conn.commit()
 
 Base.metadata.create_all(bind=engine)
 
@@ -45,10 +49,10 @@ def track_click(user_id: int, url: str):
 
     db.execute(
         text("""
-            INSERT INTO clicks (user_id, post_url)
-            VALUES (:uid, :url)
+            INSERT INTO clicks (user_id, post_url, created_at)
+            VALUES (:uid, :url, :created_at)
         """),
-        {"uid": user_id, "url": url}
+        {"uid": user_id, "url": url, "created_at": datetime.utcnow()}
     )
 
     # Mark user dirty

@@ -14,21 +14,27 @@ celery.conf.worker_concurrency = 1
 celery.conf.result_backend = "redis://redis:6379/0"
 celery.conf.timezone = "Asia/Kolkata"
 celery.conf.beat_schedule = {
-    "ingest-posts-every-30-min": {
-        "task": "tasks.ingest_posts_task",
-        "schedule": 1800.0,   # 30 minutes
+#update_behavior_embeddings
+    "update-behavior-embeddings": {
+        "task": "worker.tasks.update_behavior_embeddings",
+        # "schedule": crontab(hour=9, minute=0),  # daily at 9 AM
+        "schedule": 60.0,
+    },
+    "ingest-posts-every-5-hours": {
+        "task": "worker.tasks.ingest_posts_task",
+        "schedule": 900.0,   # 5 hours
     },
     "daily-digest": {
-        "task": "tasks.daily_digest",
+        "task": "worker.tasks.daily_digest",
         # "schedule": crontab(hour=9, minute=0),  # daily at 9 AM
-        "schedule": 240.0,
+        "schedule": 600.0,
     },
     "weekly-digest": {
         "task": "tasks.weekly_digest",
         "schedule": crontab(hour=9, minute=0, day_of_week=1),  # Monday 9 AM
     },
     "monthly-digest": {
-        "task": "tasks.monthly_digest",
+        "task": "worker.tasks.monthly_digest",
         "schedule": crontab(hour=9, minute=0, day_of_month=1),  # 1st of month
     },
 }

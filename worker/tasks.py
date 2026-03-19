@@ -1,18 +1,21 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import traceback
 # from turtle import update
 import feedparser
 import json
 import numpy as np
-import helper
-from worker import celery, send_email
-from database import SessionLocal
+from sqlalchemy.orm import Session
+from app.models import User, Post, SentPost, Click
+from worker.worker import celery, send_email
+from worker.database import SessionLocal
 from sqlalchemy import text
 import logging
 import asyncio
+from sqlalchemy import func
+from worker.helper import has_embedding
 
-from ai_utils import generate_summary
-from ai_embeddings import get_embedding, cosine_similarity
+from worker.ai_utils import generate_summary
+from worker.ai_embeddings import get_embedding, cosine_similarity
 
 
 RSS_FEEDS = [
@@ -20,39 +23,76 @@ RSS_FEEDS = [
     "https://hnrss.org/frontpage",
 ]
 
-def update_core_embeddings(user_id):
-    db = SessionLocal()
-    user_preferences = db.execute(text("""
-                            SELECT keyword from interests where user_id = :user_id
-                        """), {
-                            "user_id": user_id
-                        })
-    preference_text = ""
-    for prefer in user_preferences:
-        preference_text += prefer[0] + ""
-    # Clean & embed user input
-    structured_text = f"""
-    User selected following topic preferences:
-    {preference_text}
-    """
-    core_embedding = get_embedding(structured_text)
-    print(type(core_embedding))
-    # core_embedding = np.array(core_embedding)
-    print(type(core_embedding))
-    db.execute(
+def update_core_embeddings(user_id: int):
+    db: Session = SessionLocal()
+    try:
+        # 1. Fetch preferences
+        preferences = db.execute(
             text("""
-                UPDATE users
-                SET core_embedding = :core_embedding
-                WHERE id = :uid
+                SELECT keyword 
+                FROM interests 
+                WHERE user_id = :user_id
             """),
-            {
-                "core_embedding": json.dumps(core_embedding),
-                "uid": user_id
-            }
-    )
-    db.commit()
-    db.close()
-    return core_embedding
+            {"user_id": user_id}
+        ).fetchall()
+
+        if not preferences:
+            return None
+        
+        # 2. Build structured text (important for good embeddings)
+        preference_list = [row[0] for row in preferences]
+
+        structured_text = f"""
+        User is interested in the following topics:
+        {", ".join(preference_list)}
+        """
+
+        # 3. Generate embedding
+        embedding = get_embedding(structured_text)
+
+        # 4. Normalize (VERY IMPORTANT for cosine similarity)
+        embedding = np.array(embedding)
+        embedding = embedding / np.linalg.norm(embedding)
+
+        # 5. Store using ORM (no json.dumps)
+        user = db.get(User, user_id)
+        user.core_embedding = embedding.tolist()
+
+        db.commit()
+
+        return user.core_embedding
+    finally:
+        db.close()
+# def update_core_embeddings(user_id):
+#     db = SessionLocal()
+#     user_preferences = db.execute(text("""
+#                             SELECT keyword from interests where user_id = :user_id
+#                         """), {
+#                             "user_id": user_id
+#                         })
+#     preference_text = ""
+#     for prefer in user_preferences:
+#         preference_text += prefer[0] + ""
+#     # Clean & embed user input
+#     structured_text = f"""
+#     User selected following topic preferences:
+#     {preference_text}
+#     """
+#     core_embedding = get_embedding(structured_text)
+#     db.execute(
+#             text("""
+#                 UPDATE users
+#                 SET core_embedding = :core_embedding
+#                 WHERE id = :uid
+#             """),
+#             {
+#                 "core_embedding": json.dumps(core_embedding),
+#                 "uid": user_id
+#             }
+#     )
+#     db.commit()
+#     db.close()
+#     return core_embedding
 
 # def update_interest(db):
 
@@ -86,28 +126,40 @@ def ingest_posts(db):
 
             # try:
             embedding = get_embedding(article_text)
-            logging.info(f"article_text: {str(article_text)}")
-            logging.info(f"article_embedding: {str(embedding)}")
+            # logging.info(f"article_text: {str(article_text)}")
+            # logging.info(f"article_embedding: {str(embedding)}")
+            embedding = np.array(embedding)
+            embedding = embedding / np.linalg.norm(embedding)
             summary = generate_summary(entry.title, url)
             # except Exception as e:
             #     print("Embedding/Summary error:", e)
             #     continue
             
-            db.execute(
-                text("""
-                    INSERT INTO posts (url, title, published_at, summary, embedding)
-                    VALUES (:url, :title, :published, :summary, :embedding)
-                    ON CONFLICT (url) DO NOTHING
-                """),
-                {
-                    "url": url,
-                    "title": entry.title,
-                    "published": str(published),
-                    "summary": summary,
-                    "embedding": json.dumps(embedding),
-                }
+            post = Post(
+                url=url,
+                title=entry.title,
+                published_at=str(published),
+                summary=summary,
+                embedding=embedding.tolist()
             )
+
+            db.add(post)
             db.commit()
+            # db.execute(
+            #     text("""
+            #         INSERT INTO posts (url, title, published_at, summary, embedding)
+            #         VALUES (:url, :title, :published, :summary, :embedding::vector)
+            #         ON CONFLICT (url) DO NOTHING
+            #     """),
+            #     {
+            #         "url": url,
+            #         "title": entry.title,
+            #         "published": str(published),
+            #         "summary": summary,
+            #         "embedding": embedding.tolist(),
+            #     }
+            # )
+            # db.commit()
         
 
     print("Post ingestion complete.")
@@ -115,47 +167,53 @@ def ingest_posts(db):
 def process_digest(frequency, days_back, max_posts):
     db = SessionLocal()
 
-    users = db.execute(
-        text("""
-            SELECT id,
-                   email,
-                   core_embedding,
-                   behavior_embedding
-            FROM users
-            WHERE LOWER(frequency) = :freq
-        """),
-        {"freq": frequency.lower()}
-    ).fetchall()
-
+    # users = db.execute(
+    #     text("""
+    #         SELECT id,
+    #                email,
+    #                core_embedding,
+    #                behavior_embedding
+    #         FROM users
+    #         WHERE LOWER(frequency) = :freq
+    #     """),
+    #     {"freq": frequency.lower()}
+    # ).fetchall()
+    users = db.query(User).filter(
+            func.lower(User.frequency) == frequency.lower()
+        ).all()
     print(f"Processing {frequency} users:", users)
 
     now = datetime.utcnow()
     cutoff = now - timedelta(days=days_back)
 
-    posts = db.execute(
-        text("""
-            SELECT id, url, title, published_at, summary, embedding
-            FROM posts
-        """)
-    ).fetchall()
-
+    # posts = db.execute(
+    #     text("""
+    #         SELECT id, url, title, published_at, summary, embedding
+    #         FROM posts
+    #     """)
+    # ).fetchall()
+    logging.info(f"process digest started")
+    posts = db.query(Post).all()
     for user in users:
-        user_id = user[0]
-        user_email = user[1]
-
-        core_embedding = user[2] or []
+        user_id = user.id
+        user_email = user.email
+        # logging.info(f"process starte   d for {user_email}")
+        # logging.info(f"core embedding: {user.core_embedding}")
+        core_embedding = user.core_embedding if user.core_embedding is not None else []
         if len(core_embedding) == 0:
             core_embedding = update_core_embeddings(user_id)
-        behavior_embedding = user[3] or []
-
-        if not core_embedding and not behavior_embedding:
+        behavior_embedding = user.behavior_embedding if user.behavior_embedding is not None else []
+        # logging.info(f"core embedding: {core_embedding}")
+        if not has_embedding(core_embedding) and not has_embedding(behavior_embedding):
             print(f"No embeddings found for {user_email}")
             continue
-
+        # logging.info(f"length of core embedding {len(core_embedding)}")
+        # logging.info(f"core embedding is not None: {core_embedding is not None}")
+        # logging.info(f"core embedding np array {np.array(core_embedding)}")
         # Convert to numpy
-        core = np.array(core_embedding) if core_embedding else None
-        behavior = np.array(behavior_embedding) if behavior_embedding else None
-
+        core = np.array(core_embedding) if core_embedding is not None and len(core_embedding) > 0 else None
+        behavior = np.array(behavior_embedding) if behavior_embedding is not None and len(behavior_embedding) > 0 else None
+        # logging.info(f"core embedding: {core}")
         # Normalize helper
         def normalize(v):
             norm = np.linalg.norm(v)
@@ -163,7 +221,7 @@ def process_digest(frequency, days_back, max_posts):
 
         if core is not None:
             core = normalize(core)
-
+        logging.info(f"core: {core}")
         if behavior is not None:
             behavior = normalize(behavior)
 
@@ -172,35 +230,44 @@ def process_digest(frequency, days_back, max_posts):
             final_user_vector = (0.6 * core) + (0.4 * behavior)
         elif core is not None:
             final_user_vector = core
-        else:
+        elif behavior is not None:
             final_user_vector = behavior
+        else:
+            # logging.info(f"no embedding found {core}, {behavior}")
+            continue
 
         ranked_posts = []
-
+        # logging.info(f"total posts: {len(posts)}")
         for post in posts:
-            post_id = post[0]
-            url = post[1]
-            title = post[2]
-            published_at = datetime.fromisoformat(post[3])
-            summary = post[4]
-            embedding = post[5]
+            # logging.info(f"processing post {post.url}")
+            post_id = post.id
+            url = post.url
+            title = post.title
+            published_at = datetime.fromisoformat(post.published_at)
+            summary = post.summary
+            embedding = post.embedding
 
             if published_at < cutoff:
                 continue
 
             # Prevent duplicate sends
-            already_sent = db.execute(
-                text("""
-                    SELECT 1 FROM sent_posts
-                    WHERE user_id = :uid AND post_url = :url
-                """),
-                {"uid": user_id, "url": url}
-            ).fetchone()
-
+            # already_sent = db.execute(
+            #     text("""
+            #         SELECT 1 FROM sent_posts
+            #         WHERE user_id = :uid AND post_url = :url
+            #     """),
+            #     {"uid": user_id, "url": url}
+            # ).fetchone()
+            already_sent = db.query(SentPost).filter(
+                SentPost.user_id == user_id,
+                SentPost.post_url == url
+            ).first()
             if already_sent:
                 continue
 
-            if not embedding:
+            # if not embedding:
+            #     continue
+            if not has_embedding(embedding):
                 continue
 
             if isinstance(embedding, str):
@@ -225,14 +292,16 @@ def process_digest(frequency, days_back, max_posts):
                 "summary": summary,
                 "score": final_score
             })
+            logging.info(f"processed post {post.url}")
 
         ranked_posts = sorted(
             ranked_posts,
             key=lambda x: x["score"],
             reverse=True
         )[:max_posts]
-
+        # logging.info(f"number of posts found: {len(ranked_posts)}")
         if not ranked_posts:
+            # logging.info(f"No relevant posts for {user_email}")
             print(f"No relevant posts for {user_email}")
             continue
 
@@ -265,13 +334,19 @@ def process_digest(frequency, days_back, max_posts):
             """
 
             # Mark original URL as sent (NOT tracked link)
-            db.execute(
-                text("""
-                    INSERT INTO sent_posts (user_id, post_url)
-                    VALUES (:uid, :url)
-                """),
-                {"uid": user_id, "url": post["link"]}
+            # db.execute(
+            #     text("""
+            #         INSERT INTO sent_posts (user_id, post_url)
+            #         VALUES (:uid, :url)
+            #     """),
+            #     {"uid": user_id, "url": post["link"]}
+            # )
+            sent_post = SentPost(
+                user_id=user_id,
+                post_url=post["link"]
             )
+
+            db.add(sent_post)
 
         html_body += "</body></html>"
 
@@ -281,10 +356,9 @@ def process_digest(frequency, days_back, max_posts):
             text_body,
             html_body
         )
-
         db.commit()
 
-        print(f"Sent {frequency} digest to {user_email}")
+        logging.info(f"Sent {frequency} digest to {user_email}")
 
     db.close()
 
@@ -315,58 +389,73 @@ def ingest_posts_task():
 def update_behavior_embeddings():
     db = SessionLocal()
 
-    users = db.execute(
-        text("""
-            SELECT id, behavior_embedding, behavior_click_count,
-                   last_behavior_update_at
-            FROM users
-            WHERE needs_behavior_update = true
-            LIMIT 500
-        """)
-    ).fetchall()
-
+    # db.execute(
+    #     text("""
+    #         SELECT id, behavior_embedding, behavior_click_count,
+    #                last_behavior_update_at
+    #         FROM users
+    #         WHERE needs_behavior_update = true
+    #         LIMIT 500
+    #     """)
+    # ).fetchall()
+    users = db.query(User).filter(
+                User.needs_behavior_update == True
+            ).limit(500).all()
+    logging.info(f"total number of users: {len(users)}")
     for user in users:
         uid = user.id
 
         # Fetch new clicks
         if user.last_behavior_update_at:
-            clicks = db.execute(
-                text("""
-                    SELECT post_url FROM clicks
-                    WHERE user_id = :uid
-                    AND created_at > :last_update
-                """),
-                {"uid": uid, "last_update": user.last_behavior_update_at}
-            ).fetchall()
+            # clicks = db.execute(
+            #     text("""
+            #         SELECT post_url FROM clicks
+            #         WHERE user_id = :uid
+            #         AND created_at > :last_update
+            #     """),
+            #     {"uid": uid, "last_update": user.last_behavior_update_at}
+            # ).fetchall()
+            clicks = db.query(Click.post_url).filter(
+                Click.user_id == uid, 
+                Click.created_at == user.last_behavior_update_at 
+            ).all()
         else:
-            clicks = db.execute(
-                text("""
-                    SELECT post_url FROM clicks
-                    WHERE user_id = :uid
-                """),
-                {"uid": uid}
-            ).fetchall()
-
+            # clicks = db.execute(
+            #     text("""
+            #         SELECT post_url FROM clicks
+            #         WHERE user_id = :uid
+            #     """),
+            #     {"uid": uid}
+            # ).fetchall()
+            clicks = db.query(Click.post_url).filter(
+                Click.user_id == uid
+            ).all()
+        logging.info(f"total clicks: {len(clicks)}")
         if not clicks:
             continue
 
         # Get embeddings for clicked posts
         post_embeddings = []
         for row in clicks:
-            post = db.execute(
-                text("""
-                    SELECT embedding FROM posts
-                    WHERE url = :url
-                """),
-                {"url": row.post_url}
-            ).fetchone()
-
-            if post and post.embedding:
+            # post = db.execute(
+            #     text("""
+            #         SELECT embedding FROM posts
+            #         WHERE url = :url
+            #     """),
+            #     {"url": row.post_url}
+            # ).fetchone()
+            post = db.query(Post.embedding).filter(
+                Post.url == row.post_url
+            ).first()
+            if len(post) == 0:
+                continue
+            if has_embedding(post.embedding) :
                 emb = post.embedding
-                if isinstance(emb, dict):
-                    emb = emb.get("embedding", [])
+                # logging.info(f"type of emp: {type(post.embedding)}")
+                # if isinstance(emb, dict):
+                #     emb = emb.get("embedding", [])
                 post_embeddings.append(emb)
-
+        logging.info(f"total embeddings: {len(post_embeddings)}")
         if not post_embeddings:
             continue
 
@@ -381,22 +470,25 @@ def update_behavior_embeddings():
             updated = ((old_emb * old_count) + (new_avg * new_count)) / (old_count + new_count)
         else:
             updated = new_avg
-
-        db.execute(
-            text("""
-                UPDATE users
-                SET behavior_embedding = :emb,
-                    behavior_click_count = :count,
-                    last_behavior_update_at = NOW(),
-                    needs_behavior_update = false
-                WHERE id = :uid
-            """),
-            {
-                "emb": updated.tolist(),
-                "count": old_count + new_count,
-                "uid": uid,
-            }
-        )
+        # db.execute(
+        #     text("""
+        #         UPDATE users
+        #         SET behavior_embedding = :emb,
+        #             behavior_click_count = :count,
+        #             last_behavior_update_at = NOW(),
+        #             needs_behavior_update = false
+        #         WHERE id = :uid
+        #     """),
+        #     {
+        #         "emb": updated.tolist(),
+        #         "count": old_count + new_count,
+        #         "uid": uid,
+        #     }
+        # )
+        user.behavior_embedding = updated.tolist()
+        user.behavior_click_count = old_count + new_count
+        user.needs_behavior_update = False
+        user.last_behavior_update_at = datetime.now(timezone.utc)
 
     db.commit()
     db.close()

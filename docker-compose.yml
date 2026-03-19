@@ -1,7 +1,9 @@
 services:
 
   api:
-    build: ./api
+    build:
+      context: .
+      dockerfile: api/Dockerfile
     ports:
       - "8000:8000"
     env_file:
@@ -13,7 +15,9 @@ services:
         condition: service_started
 
   worker:
-    build: ./worker
+    build:
+      context: .
+      dockerfile: worker/Dockerfile
     env_file:
       - .env
     depends_on:
@@ -23,13 +27,15 @@ services:
         condition: service_started
 
   db:
-    image: postgres:15
+    image: pgvector/pgvector:pg15
     ports:
-      - "5433:5432"  
+      - "5433:5432"
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: techdigest
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 5s
@@ -40,7 +46,11 @@ services:
     image: redis:7
   
   beat:
-    build: ./worker
-    command: celery -A tasks beat --loglevel=info
+    build:
+      context: .
+      dockerfile: worker/Dockerfile
+    command: celery -A worker.tasks beat --loglevel=info
     depends_on:
       - redis
+volumes:
+  postgres_data:

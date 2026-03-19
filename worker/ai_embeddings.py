@@ -1,6 +1,6 @@
 import requests
 import numpy as np
-import helper
+from worker.helper import clean_text
 OLLAMA_EMBED_URL = "http://host.docker.internal:11434/api/embeddings"
 MODEL = "mxbai-embed-large:latest"
 
@@ -10,7 +10,7 @@ def get_embedding(text):
         if not isinstance(text, str) or not text.strip():
             return []
 
-        text = helper.clean_text(text)
+        text = clean_text(text)
 
         MAX_CHARS = 1500
         text = text[:MAX_CHARS]
